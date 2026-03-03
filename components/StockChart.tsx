@@ -26,9 +26,20 @@ export default function StockChart({ data, mainIndicator, subIndicators }: Stock
     if (!mainChartContainerRef.current || !subChartContainerRef.current || data.length === 0) return;
 
     const handleResize = () => {
-      mainChartRef.current?.applyOptions({ width: mainChartContainerRef.current?.clientWidth });
-      subChartRef.current?.applyOptions({ width: subChartContainerRef.current?.clientWidth });
+      if (mainChartContainerRef.current && mainChartContainerRef.current.clientWidth > 0) {
+        mainChartRef.current?.applyOptions({ width: mainChartContainerRef.current.clientWidth });
+      }
+      if (subChartContainerRef.current && subChartContainerRef.current.clientWidth > 0) {
+        subChartRef.current?.applyOptions({ width: subChartContainerRef.current.clientWidth });
+      }
     };
+
+    const resizeObserver = new ResizeObserver(() => {
+      handleResize();
+    });
+
+    resizeObserver.observe(mainChartContainerRef.current);
+    resizeObserver.observe(subChartContainerRef.current);
 
     const mainChart = createChart(mainChartContainerRef.current, {
       layout: {
@@ -126,10 +137,8 @@ export default function StockChart({ data, mainIndicator, subIndicators }: Stock
     candlestickSeries.setData(data);
     candlestickSeriesRef.current = candlestickSeries;
 
-    window.addEventListener('resize', handleResize);
-
     return () => {
-      window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
       mainChart.remove();
       subChart.remove();
       mainOverlaySeriesRef.current = [];
@@ -391,7 +400,7 @@ export default function StockChart({ data, mainIndicator, subIndicators }: Stock
   const activeIndicatorsCount = subIndicators.filter(ind => ind !== 'NONE').length;
 
   return (
-    <div className="flex flex-col w-full h-full border border-gray-200 rounded-lg overflow-hidden bg-white">
+    <div className="flex flex-col w-full border border-gray-200 rounded-lg overflow-hidden bg-white">
       <div ref={mainChartContainerRef} className="w-full relative" style={{ height: '400px' }} />
       {activeIndicatorsCount > 0 && <div className="w-full h-[1px] bg-gray-200" />}
       <div ref={subChartContainerRef} className="w-full relative" style={{ height: '0px', display: 'none' }} />

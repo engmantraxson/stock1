@@ -195,7 +195,7 @@ export default function Home() {
         <div className="lg:col-span-3 space-y-4">
           {/* Toolbars */}
           <div className="bg-white p-2 rounded-lg border border-gray-200 flex flex-wrap items-center gap-4 shadow-sm">
-            <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-md">
+            <div className="flex items-center gap-1 flex-wrap bg-gray-100 p-1 rounded-md">
               {intervals.map(int => (
                 <button
                   key={int.value}
@@ -207,9 +207,9 @@ export default function Home() {
               ))}
             </div>
 
-            <div className="h-6 w-px bg-gray-300 mx-2"></div>
+            <div className="hidden sm:block h-6 w-px bg-gray-300 mx-2"></div>
 
-            <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-md">
+            <div className="flex items-center gap-1 flex-wrap bg-gray-100 p-1 rounded-md">
               {timeframes.map(tf => (
                 <button
                   key={tf.value}
@@ -222,7 +222,7 @@ export default function Home() {
             </div>
 
             {timeframe === 'custom' && (
-              <div className="flex items-center gap-2 ml-2">
+              <div className="flex items-center gap-2 ml-2 flex-wrap">
                 <input 
                   type="date" 
                   value={startDate} 
@@ -239,7 +239,7 @@ export default function Home() {
               </div>
             )}
             
-            <div className="h-6 w-px bg-gray-300 mx-2"></div>
+            <div className="hidden sm:block h-6 w-px bg-gray-300 mx-2"></div>
             
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Main</span>
@@ -258,7 +258,7 @@ export default function Home() {
           </div>
 
           {/* Chart Area */}
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 min-h-[600px] flex flex-col relative">
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 min-h-[450px] flex flex-col relative">
             {loading && (
               <div className="absolute inset-0 z-10 bg-white/80 flex items-center justify-center">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
