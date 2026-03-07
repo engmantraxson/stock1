@@ -14,7 +14,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [mainIndicator, setMainIndicator] = useState('MA');
-  const [selectedSubIndicators, setSelectedSubIndicators] = useState<string[]>(['VOL', 'NONE', 'NONE', 'NONE', 'NONE']);
+  const [selectedSubIndicators, setSelectedSubIndicators] = useState<string[]>(['VOL', 'NONE', 'NONE', 'NONE', 'NONE', 'NONE', 'NONE', 'NONE', 'NONE', 'NONE']);
   const [timeframe, setTimeframe] = useState('1y');
   const [interval, setInterval] = useState('1d');
   const [startDate, setStartDate] = useState('');
@@ -99,6 +99,46 @@ export default function Home() {
     setAlerts(prev => prev.filter(a => a.id !== id));
   };
 
+  // Fetch news using Gemini API with Google Search grounding
+  useEffect(() => {
+    const fetchNews = async () => {
+      if (!symbol) return;
+      setNewsLoading(true);
+      setNewsText(null);
+      setNewsChunks([]);
+      try {
+        const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+        if (!apiKey) {
+          setNewsText("Gemini API key is missing.");
+          setNewsLoading(false);
+          return;
+        }
+        
+        const ai = new GoogleGenAI({ apiKey });
+        const response = await ai.models.generateContent({
+          model: "gemini-3-flash-preview",
+          contents: `Provide a brief summary of the latest news headlines and events for the stock ${stockName} (${symbol}). Keep it concise and informative.`,
+          config: {
+            tools: [{ googleSearch: {} }],
+          },
+        });
+        
+        setNewsText(response.text || 'No news found.');
+        const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+        if (chunks) {
+          setNewsChunks(chunks);
+        }
+      } catch (err) {
+        console.error("Failed to fetch news:", err);
+        setNewsText("Failed to load news.");
+      } finally {
+        setNewsLoading(false);
+      }
+    };
+
+    fetchNews();
+  }, [symbol, stockName]);
+
   const currentStockAlerts = alerts.filter(a => a.symbol === symbol);
 
   useEffect(() => {
@@ -155,36 +195,6 @@ export default function Home() {
     
     return () => window.clearInterval(intervalId);
   }, [alerts]);
-
-  useEffect(() => {
-    const fetchNews = async () => {
-      setNewsLoading(true);
-      setNewsText(null);
-      setNewsChunks([]);
-      try {
-        const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
-        const response = await ai.models.generateContent({
-          model: "gemini-2.5-flash",
-          contents: `Find the latest news headlines and a brief summary for the stock: ${stockName} (${symbol}). Provide at most 5 news items. Format the output as Markdown.`,
-          config: {
-            tools: [{ googleSearch: {} }],
-          },
-        });
-
-        const text = response.text;
-        if (text) {
-          setNewsText(text);
-          const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
-          setNewsChunks(chunks || []);
-        }
-      } catch (err) {
-        console.error('Failed to fetch news', err);
-      } finally {
-        setNewsLoading(false);
-      }
-    };
-    fetchNews();
-  }, [symbol, stockName]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -539,8 +549,8 @@ export default function Home() {
           {/* Sub Indicators Toolbar */}
           <div className="bg-white p-4 rounded-lg border border-gray-200 flex flex-col gap-3 shadow-sm">
             <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Sub Indicators</span>
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-              {[0, 1, 2, 3, 4].map((index) => (
+            <div className="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-10 gap-2">
+              {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((index) => (
                 <div key={index} className="flex flex-col gap-1">
                   <label className="text-[10px] text-gray-400 uppercase font-medium">Slot {index + 1}</label>
                   <select
@@ -573,18 +583,26 @@ export default function Home() {
             {favorites.length > 0 ? (
               <ul className="space-y-2 max-h-60 overflow-y-auto pr-1">
                 {favorites.map((fav) => (
-                  <li key={fav.symbol}>
+                  <li key={fav.symbol} className={`flex items-center justify-between p-1 rounded-md transition-colors group ${symbol === fav.symbol ? 'bg-blue-50 border border-blue-100' : 'hover:bg-gray-50 border border-transparent'}`}>
                     <button
                       onClick={() => {
                         setSymbol(fav.symbol);
                         setStockName(fav.name);
                       }}
-                      className={`w-full text-left flex items-center justify-between p-2 rounded-md transition-colors group ${symbol === fav.symbol ? 'bg-blue-50 border border-blue-100' : 'hover:bg-gray-50 border border-transparent'}`}
+                      className="flex-1 text-left flex flex-col truncate pr-2 p-1"
                     >
-                      <div className="flex flex-col truncate pr-2">
-                        <span className={`text-sm font-medium truncate ${symbol === fav.symbol ? 'text-blue-700' : 'text-gray-900'}`}>{fav.symbol}</span>
-                        <span className="text-xs text-gray-500 truncate">{fav.name}</span>
-                      </div>
+                      <span className={`text-sm font-medium truncate ${symbol === fav.symbol ? 'text-blue-700' : 'text-gray-900'}`}>{fav.symbol}</span>
+                      <span className="text-xs text-gray-500 truncate">{fav.name}</span>
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setFavorites(prev => prev.filter(f => f.symbol !== fav.symbol));
+                      }}
+                      className="text-gray-400 hover:text-red-500 transition-colors p-2 opacity-0 group-hover:opacity-100 focus:opacity-100"
+                      title="Remove from favorites"
+                    >
+                      <Trash2 className="w-4 h-4" />
                     </button>
                   </li>
                 ))}
