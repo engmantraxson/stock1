@@ -2,9 +2,12 @@
 
 import React, { useEffect, useState } from 'react';
 import StockChart from '@/components/StockChart';
+import SearchBar from '@/components/SearchBar';
 import { ChartData } from '@/lib/indicators';
 import { format } from 'date-fns';
-import { Activity, TrendingUp, TrendingDown, Clock, BarChart2 } from 'lucide-react';
+import { Activity, TrendingUp, TrendingDown, Clock, BarChart2, Star, Bell, Trash2, Newspaper } from 'lucide-react';
+import Markdown from 'react-markdown';
+import { GoogleGenAI } from "@google/genai";
 
 export default function Home() {
   const [data, setData] = useState<ChartData[]>([]);
@@ -16,8 +19,172 @@ export default function Home() {
   const [interval, setInterval] = useState('1d');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  
+  const [symbol, setSymbol] = useState('000001.SS');
+  const [stockName, setStockName] = useState('上证指数');
 
   const [quote, setQuote] = useState<any>(null);
+  
+  const [favorites, setFavorites] = useState<{symbol: string, name: string}[]>([]);
+  
+  const [alerts, setAlerts] = useState<{id: string, symbol: string, price: number, type: 'above' | 'below'}[]>([]);
+  const [newAlertPrice, setNewAlertPrice] = useState('');
+  const [newAlertType, setNewAlertType] = useState<'above' | 'below'>('above');
+
+  const [newsText, setNewsText] = useState<string | null>(null);
+  const [newsChunks, setNewsChunks] = useState<any[]>([]);
+  const [newsLoading, setNewsLoading] = useState(false);
+
+  const [triggeredAlerts, setTriggeredAlerts] = useState<any[]>([]);
+  const [showGlobalAlerts, setShowGlobalAlerts] = useState(false);
+
+  // Load favorites and alerts on mount
+  useEffect(() => {
+    const savedFavorites = localStorage.getItem('stockFavorites');
+    if (savedFavorites) {
+      try {
+        setFavorites(JSON.parse(savedFavorites));
+      } catch (e) {
+        console.error('Failed to parse favorites', e);
+      }
+    }
+
+    const savedAlerts = localStorage.getItem('stockAlerts');
+    if (savedAlerts) {
+      try {
+        setAlerts(JSON.parse(savedAlerts));
+      } catch (e) {
+        console.error('Failed to parse alerts', e);
+      }
+    }
+  }, []);
+
+  // Save favorites when changed
+  useEffect(() => {
+    localStorage.setItem('stockFavorites', JSON.stringify(favorites));
+  }, [favorites]);
+
+  // Save alerts when changed
+  useEffect(() => {
+    localStorage.setItem('stockAlerts', JSON.stringify(alerts));
+  }, [alerts]);
+
+  const toggleFavorite = () => {
+    setFavorites(prev => {
+      const isFav = prev.some(f => f.symbol === symbol);
+      if (isFav) {
+        return prev.filter(f => f.symbol !== symbol);
+      } else {
+        return [...prev, { symbol, name: stockName }];
+      }
+    });
+  };
+
+  const isFavorite = favorites.some(f => f.symbol === symbol);
+
+  const handleAddAlert = () => {
+    const price = parseFloat(newAlertPrice);
+    if (!isNaN(price) && price > 0) {
+      setAlerts(prev => [...prev, {
+        id: Date.now().toString(),
+        symbol,
+        price,
+        type: newAlertType
+      }]);
+      setNewAlertPrice('');
+    }
+  };
+
+  const removeAlert = (id: string) => {
+    setAlerts(prev => prev.filter(a => a.id !== id));
+  };
+
+  const currentStockAlerts = alerts.filter(a => a.symbol === symbol);
+
+  useEffect(() => {
+    const checkAlerts = async () => {
+      if (alerts.length === 0) {
+        setTriggeredAlerts([]);
+        return;
+      }
+      
+      const uniqueSymbols = Array.from(new Set(alerts.map(a => a.symbol)));
+      
+      try {
+        const promises = uniqueSymbols.map(sym => 
+          fetch(`/api/stock?symbol=${encodeURIComponent(sym)}&interval=1d&range=1d`)
+            .then(async res => {
+              const contentType = res.headers.get('content-type');
+              if (!contentType || !contentType.includes('application/json')) {
+                return { error: 'Received non-JSON response' };
+              }
+              return res.json();
+            })
+            .catch(err => {
+              console.error(`Failed to fetch alert data for ${sym}:`, err);
+              return { error: 'Failed to fetch' };
+            })
+        );
+        
+        const results = await Promise.all(promises);
+        
+        const currentPrices: Record<string, number> = {};
+        results.forEach((json, index) => {
+          if (!json.error && json.chart?.result?.[0]?.meta?.regularMarketPrice) {
+            currentPrices[uniqueSymbols[index]] = json.chart.result[0].meta.regularMarketPrice;
+          }
+        });
+        
+        const triggered = alerts.filter(alert => {
+          const currentPrice = currentPrices[alert.symbol];
+          if (!currentPrice) return false;
+          
+          if (alert.type === 'above' && currentPrice >= alert.price) return true;
+          if (alert.type === 'below' && currentPrice <= alert.price) return true;
+          return false;
+        });
+        
+        setTriggeredAlerts(triggered.map(a => ({ ...a, currentPrice: currentPrices[a.symbol] })));
+      } catch (err) {
+        console.error("Failed to check alerts", err);
+      }
+    };
+    
+    checkAlerts();
+    const intervalId = window.setInterval(checkAlerts, 60000); // Check every minute
+    
+    return () => window.clearInterval(intervalId);
+  }, [alerts]);
+
+  useEffect(() => {
+    const fetchNews = async () => {
+      setNewsLoading(true);
+      setNewsText(null);
+      setNewsChunks([]);
+      try {
+        const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
+        const response = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: `Find the latest news headlines and a brief summary for the stock: ${stockName} (${symbol}). Provide at most 5 news items. Format the output as Markdown.`,
+          config: {
+            tools: [{ googleSearch: {} }],
+          },
+        });
+
+        const text = response.text;
+        if (text) {
+          setNewsText(text);
+          const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+          setNewsChunks(chunks || []);
+        }
+      } catch (err) {
+        console.error('Failed to fetch news', err);
+      } finally {
+        setNewsLoading(false);
+      }
+    };
+    fetchNews();
+  }, [symbol, stockName]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -28,7 +195,7 @@ export default function Home() {
       setLoading(true);
       setError(null);
       try {
-        let url = `/api/stock?symbol=000001.SS&interval=${interval}`;
+        let url = `/api/stock?symbol=${encodeURIComponent(symbol)}&interval=${interval}`;
         if (timeframe === 'custom') {
           const p1 = Math.floor(new Date(startDate).getTime() / 1000);
           const p2 = Math.floor(new Date(endDate).getTime() / 1000) + 86399; // end of day
@@ -39,7 +206,17 @@ export default function Home() {
         
         const res = await fetch(url);
         if (!res.ok) throw new Error('Failed to fetch data');
+        
+        const contentType = res.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          throw new Error('Received non-JSON response');
+        }
+        
         const json = await res.json();
+        
+        if (json.error) {
+          throw new Error(json.error);
+        }
         
         const result = json.chart.result[0];
         const timestamps = result.timestamp;
@@ -72,8 +249,25 @@ export default function Home() {
           return timeA - timeB;
         });
         
-        // Remove duplicates
-        const uniqueData = chartData.filter((v, i, a) => a.findIndex(t => (t.time === v.time)) === i);
+        // Remove duplicates, merging data for the same time
+        // This ensures we keep the most up-to-date close price while not losing volume data
+        // if a subsequent real-time quote has 0 volume.
+        const uniqueDataMap = new Map<string | number, ChartData>();
+        chartData.forEach(d => {
+          if (uniqueDataMap.has(d.time)) {
+            const existing = uniqueDataMap.get(d.time)!;
+            uniqueDataMap.set(d.time, {
+              ...d,
+              open: existing.open, // Keep the original open
+              high: Math.max(existing.high, d.high),
+              low: Math.min(existing.low, d.low),
+              volume: Math.max(existing.volume, d.volume),
+            });
+          } else {
+            uniqueDataMap.set(d.time, d);
+          }
+        });
+        const uniqueData = Array.from(uniqueDataMap.values());
         
         setData(uniqueData);
 
@@ -101,7 +295,7 @@ export default function Home() {
     };
 
     fetchData();
-  }, [timeframe, interval, startDate, endDate]);
+  }, [timeframe, interval, startDate, endDate, symbol]);
 
   const handleIntervalChange = (newInterval: string) => {
     setInterval(newInterval);
@@ -156,12 +350,19 @@ export default function Home() {
       {/* Header */}
       <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
         <div className="flex items-center gap-4">
-          <div className="w-10 h-10 bg-red-600 text-white rounded-lg flex items-center justify-center font-bold text-xl">
-            上
+          <div className="w-10 h-10 bg-blue-600 text-white rounded-lg flex items-center justify-center font-bold text-xl">
+            {stockName ? stockName.charAt(0).toUpperCase() : symbol.charAt(0).toUpperCase()}
           </div>
           <div>
             <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-              上证指数 <span className="text-sm font-normal text-gray-500 bg-gray-100 px-2 py-0.5 rounded">SH000001</span>
+              {stockName} <span className="text-sm font-normal text-gray-500 bg-gray-100 px-2 py-0.5 rounded">{symbol}</span>
+              <button 
+                onClick={toggleFavorite}
+                className={`ml-1 p-1 rounded-full hover:bg-gray-100 transition-colors ${isFavorite ? 'text-yellow-400' : 'text-gray-300'}`}
+                title={isFavorite ? "Remove from favorites" : "Add to favorites"}
+              >
+                <Star className="w-5 h-5" fill={isFavorite ? "currentColor" : "none"} />
+              </button>
             </h1>
             <div className="flex items-center gap-3 text-sm mt-1">
               {quote ? (
@@ -182,13 +383,74 @@ export default function Home() {
             </div>
           </div>
         </div>
+        <div className="flex-1 max-w-md mx-8 hidden md:block">
+          <SearchBar onSelect={(sym, name) => {
+            setSymbol(sym);
+            setStockName(name);
+          }} />
+        </div>
         <div className="flex items-center gap-4 text-sm text-gray-500">
-          <div className="flex items-center gap-1">
+          <div className="relative">
+            <button 
+              onClick={() => setShowGlobalAlerts(!showGlobalAlerts)}
+              className="relative p-2 hover:bg-gray-100 rounded-full transition-colors"
+            >
+              <Bell className="w-5 h-5" />
+              {triggeredAlerts.length > 0 && (
+                <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white animate-pulse"></span>
+              )}
+            </button>
+            
+            {showGlobalAlerts && (
+              <div className="absolute right-0 mt-2 w-72 bg-white rounded-lg shadow-lg border border-gray-200 z-50 overflow-hidden">
+                <div className="p-3 border-b border-gray-100 bg-gray-50 font-semibold text-gray-700 flex justify-between items-center">
+                  <span>Triggered Alerts</span>
+                  <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full">{triggeredAlerts.length} active</span>
+                </div>
+                <div className="max-h-64 overflow-y-auto">
+                  {triggeredAlerts.length > 0 ? (
+                    <ul className="divide-y divide-gray-100">
+                      {triggeredAlerts.map(alert => (
+                        <li key={alert.id} className="p-3 hover:bg-gray-50 transition-colors cursor-pointer" onClick={() => {
+                          setSymbol(alert.symbol);
+                          setShowGlobalAlerts(false);
+                        }}>
+                          <div className="flex justify-between items-center mb-1">
+                            <span className="font-bold text-gray-900">{alert.symbol}</span>
+                            <span className="text-xs text-gray-500">{alert.type === 'above' ? 'Target ≥' : 'Target ≤'} {alert.price.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between items-center text-sm">
+                            <span className="text-gray-600">Current Price:</span>
+                            <span className={`font-semibold ${alert.type === 'above' ? 'text-green-600' : 'text-red-600'}`}>
+                              {alert.currentPrice?.toFixed(2)}
+                            </span>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="p-4 text-center text-gray-500 text-sm">
+                      No alerts currently triggered.
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-1 hidden sm:flex">
             <Clock className="w-4 h-4" />
             <span>Market Closed</span>
           </div>
         </div>
       </header>
+
+      {/* Mobile Search Bar */}
+      <div className="md:hidden bg-white border-b border-gray-200 px-6 py-3">
+        <SearchBar onSelect={(sym, name) => {
+          setSymbol(sym);
+          setStockName(name);
+        }} />
+      </div>
 
       <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-4 gap-6">
         {/* Left Column: Chart */}
@@ -302,6 +564,36 @@ export default function Home() {
 
         {/* Right Column: Details */}
         <div className="space-y-6">
+          {/* Favorites List */}
+          <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-5">
+            <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <Star className="w-4 h-4 text-yellow-400" fill="currentColor" />
+              Favorites
+            </h3>
+            {favorites.length > 0 ? (
+              <ul className="space-y-2 max-h-60 overflow-y-auto pr-1">
+                {favorites.map((fav) => (
+                  <li key={fav.symbol}>
+                    <button
+                      onClick={() => {
+                        setSymbol(fav.symbol);
+                        setStockName(fav.name);
+                      }}
+                      className={`w-full text-left flex items-center justify-between p-2 rounded-md transition-colors group ${symbol === fav.symbol ? 'bg-blue-50 border border-blue-100' : 'hover:bg-gray-50 border border-transparent'}`}
+                    >
+                      <div className="flex flex-col truncate pr-2">
+                        <span className={`text-sm font-medium truncate ${symbol === fav.symbol ? 'text-blue-700' : 'text-gray-900'}`}>{fav.symbol}</span>
+                        <span className="text-xs text-gray-500 truncate">{fav.name}</span>
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-gray-500 italic">No favorites added yet.</p>
+            )}
+          </div>
+
           <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-5">
             <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center gap-2">
               <BarChart2 className="w-4 h-4 text-blue-600" />
@@ -348,11 +640,117 @@ export default function Home() {
           <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-5">
             <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center gap-2">
               <Activity className="w-4 h-4 text-blue-600" />
-              About SH000001
+              About {symbol}
             </h3>
             <p className="text-sm text-gray-600 leading-relaxed">
-              The SSE Composite Index is a stock market index of all stocks (A shares and B shares) that are traded at the Shanghai Stock Exchange. It is a capitalization-weighted index.
+              {stockName} ({symbol}) is currently being viewed. Additional company information would be displayed here.
             </p>
+          </div>
+
+          {/* Price Alerts */}
+          <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-5">
+            <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <Bell className="w-4 h-4 text-blue-600" />
+              Price Alerts
+            </h3>
+            
+            <div className="flex flex-col gap-3 mb-4">
+              <div className="flex gap-2">
+                <select
+                  value={newAlertType}
+                  onChange={(e) => setNewAlertType(e.target.value as 'above' | 'below')}
+                  className="text-sm border border-gray-300 rounded-md px-2 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value="above">Above</option>
+                  <option value="below">Below</option>
+                </select>
+                <input
+                  type="number"
+                  placeholder="Price"
+                  value={newAlertPrice}
+                  onChange={(e) => setNewAlertPrice(e.target.value)}
+                  className="flex-1 text-sm border border-gray-300 rounded-md px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                  step="0.01"
+                />
+              </div>
+              <button
+                onClick={handleAddAlert}
+                disabled={!newAlertPrice || isNaN(parseFloat(newAlertPrice))}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-2 px-4 rounded-md transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
+              >
+                Add Alert
+              </button>
+            </div>
+
+            {currentStockAlerts.length > 0 ? (
+              <ul className="space-y-2">
+                {currentStockAlerts.map((alert) => {
+                  const isTriggered = quote && (
+                    (alert.type === 'above' && quote.price >= alert.price) ||
+                    (alert.type === 'below' && quote.price <= alert.price)
+                  );
+                  
+                  return (
+                    <li key={alert.id} className={`flex items-center justify-between p-2 rounded-md border ${isTriggered ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'}`}>
+                      <div className="flex items-center gap-2">
+                        <div className={`w-2 h-2 rounded-full ${isTriggered ? 'bg-red-500 animate-pulse' : 'bg-gray-400'}`}></div>
+                        <span className="text-sm text-gray-700">
+                          {alert.type === 'above' ? '≥' : '≤'} <span className="font-semibold">{alert.price.toFixed(2)}</span>
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => removeAlert(alert.id)}
+                        className="text-gray-400 hover:text-red-500 transition-colors p-1"
+                        title="Remove alert"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="text-sm text-gray-500 italic text-center py-2">No alerts set for {symbol}</p>
+            )}
+          </div>
+
+          {/* News Feed */}
+          <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-5">
+            <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <Newspaper className="w-4 h-4 text-blue-600" />
+              Latest News
+            </h3>
+            
+            {newsLoading ? (
+              <div className="flex justify-center py-4">
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+              </div>
+            ) : newsText ? (
+              <div className="prose prose-sm max-w-none prose-a:text-blue-600 hover:prose-a:text-blue-800">
+                <Markdown>{newsText}</Markdown>
+                {newsChunks && newsChunks.length > 0 && (
+                  <div className="mt-4 pt-4 border-t border-gray-100">
+                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Sources</h4>
+                    <ul className="space-y-1">
+                      {newsChunks.map((chunk: any, i: number) => {
+                        if (chunk.web?.uri) {
+                          return (
+                            <li key={i} className="text-xs truncate">
+                              <a href={chunk.web.uri} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
+                                {chunk.web.title || chunk.web.uri}
+                              </a>
+                            </li>
+                          );
+                        }
+                        return null;
+                      })}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500 italic text-center py-2">No news available for {symbol}</p>
+            )}
           </div>
         </div>
       </main>

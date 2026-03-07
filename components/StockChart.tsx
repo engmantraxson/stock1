@@ -14,6 +14,7 @@ interface StockChartProps {
 export default function StockChart({ data, mainIndicator, subIndicators }: StockChartProps) {
   const mainChartContainerRef = useRef<HTMLDivElement>(null);
   const subChartContainerRef = useRef<HTMLDivElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
   
   const mainChartRef = useRef<IChartApi | null>(null);
   const subChartRef = useRef<IChartApi | null>(null);
@@ -106,13 +107,61 @@ export default function StockChart({ data, mainIndicator, subIndicators }: Stock
       }
     });
 
-    // Sync crosshair
+    // Sync crosshair and update tooltip
     mainChart.subscribeCrosshairMove(param => {
       if (param.time && subSeriesRef.current[0]) {
         // Pass 0 as price for subchart to avoid using pixel coordinates
         subChart.setCrosshairPosition(0, param.time, subSeriesRef.current[0]);
       } else {
         subChart.clearCrosshairPosition();
+      }
+
+      if (tooltipRef.current) {
+        if (
+          param.point === undefined ||
+          !param.time ||
+          param.point.x < 0 ||
+          param.point.x > mainChartContainerRef.current!.clientWidth ||
+          param.point.y < 0 ||
+          param.point.y > mainChartContainerRef.current!.clientHeight
+        ) {
+          tooltipRef.current.style.display = 'none';
+        } else {
+          const dataPoint = param.seriesData.get(candlestickSeriesRef.current!) as any;
+          if (dataPoint) {
+            const dateStr = typeof param.time === 'string' ? param.time : new Date((param.time as number) * 1000).toLocaleString();
+            tooltipRef.current.style.display = 'block';
+            tooltipRef.current.innerHTML = `
+              <div class="font-semibold mb-1">${dateStr}</div>
+              <div class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                <div class="text-gray-500">O: <span class="text-gray-900 font-medium">${dataPoint.open.toFixed(2)}</span></div>
+                <div class="text-gray-500">H: <span class="text-gray-900 font-medium">${dataPoint.high.toFixed(2)}</span></div>
+                <div class="text-gray-500">L: <span class="text-gray-900 font-medium">${dataPoint.low.toFixed(2)}</span></div>
+                <div class="text-gray-500">C: <span class="text-gray-900 font-medium">${dataPoint.close.toFixed(2)}</span></div>
+              </div>
+            `;
+            
+            // Position tooltip
+            const tooltipWidth = 150;
+            const tooltipHeight = 80;
+            const margin = 15;
+            
+            let left = param.point.x + margin;
+            if (left + tooltipWidth > mainChartContainerRef.current!.clientWidth) {
+              left = param.point.x - tooltipWidth - margin;
+            }
+            
+            let top = param.point.y + margin;
+            if (top + tooltipHeight > mainChartContainerRef.current!.clientHeight) {
+              top = param.point.y - tooltipHeight - margin;
+            }
+            
+            tooltipRef.current.style.left = left + 'px';
+            tooltipRef.current.style.top = top + 'px';
+          } else {
+            tooltipRef.current.style.display = 'none';
+          }
+        }
       }
     });
 
@@ -401,7 +450,13 @@ export default function StockChart({ data, mainIndicator, subIndicators }: Stock
 
   return (
     <div className="flex flex-col w-full border border-gray-200 rounded-lg overflow-hidden bg-white">
-      <div ref={mainChartContainerRef} className="w-full relative" style={{ height: '400px' }} />
+      <div ref={mainChartContainerRef} className="w-full relative" style={{ height: '400px' }}>
+        <div 
+          ref={tooltipRef} 
+          className="absolute z-50 bg-white border border-gray-200 shadow-lg rounded p-2 pointer-events-none"
+          style={{ display: 'none', width: '150px' }}
+        />
+      </div>
       {activeIndicatorsCount > 0 && <div className="w-full h-[1px] bg-gray-200" />}
       <div ref={subChartContainerRef} className="w-full relative" style={{ height: '0px', display: 'none' }} />
     </div>
