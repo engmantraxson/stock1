@@ -15,6 +15,7 @@ export default function StockChart({ data, mainIndicator, subIndicators }: Stock
   const mainChartContainerRef = useRef<HTMLDivElement>(null);
   const subChartContainerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const subTooltipRef = useRef<HTMLDivElement>(null);
   
   const mainChartRef = useRef<IChartApi | null>(null);
   const subChartRef = useRef<IChartApi | null>(null);
@@ -129,6 +130,15 @@ export default function StockChart({ data, mainIndicator, subIndicators }: Stock
         } else {
           const dataPoint = param.seriesData.get(candlestickSeriesRef.current!) as any;
           if (dataPoint) {
+            let extraHtml = '';
+            mainOverlaySeriesRef.current.forEach(series => {
+              const point = param.seriesData.get(series) as any;
+              if (point && point.value !== undefined) {
+                const title = series.options().title || 'Indicator';
+                extraHtml += `<div class="text-gray-500">${title}: <span class="text-gray-900 font-medium">${point.value.toFixed(2)}</span></div>`;
+              }
+            });
+
             const dateStr = typeof param.time === 'string' ? param.time : new Date((param.time as number) * 1000).toLocaleString();
             tooltipRef.current.style.display = 'block';
             tooltipRef.current.innerHTML = `
@@ -138,12 +148,13 @@ export default function StockChart({ data, mainIndicator, subIndicators }: Stock
                 <div class="text-gray-500">H: <span class="text-gray-900 font-medium">${dataPoint.high.toFixed(2)}</span></div>
                 <div class="text-gray-500">L: <span class="text-gray-900 font-medium">${dataPoint.low.toFixed(2)}</span></div>
                 <div class="text-gray-500">C: <span class="text-gray-900 font-medium">${dataPoint.close.toFixed(2)}</span></div>
+                ${extraHtml}
               </div>
             `;
             
             // Position tooltip
             const tooltipWidth = 150;
-            const tooltipHeight = 80;
+            const tooltipHeight = 80 + (mainOverlaySeriesRef.current.length * 10);
             const margin = 15;
             
             let left = param.point.x + margin;
@@ -173,6 +184,59 @@ export default function StockChart({ data, mainIndicator, subIndicators }: Stock
         mainChart.setCrosshairPosition(price, param.time, candlestickSeriesRef.current);
       } else {
         mainChart.clearCrosshairPosition();
+      }
+
+      if (subTooltipRef.current) {
+        if (
+          param.point === undefined ||
+          !param.time ||
+          param.point.x < 0 ||
+          param.point.x > subChartContainerRef.current!.clientWidth ||
+          param.point.y < 0 ||
+          param.point.y > subChartContainerRef.current!.clientHeight
+        ) {
+          subTooltipRef.current.style.display = 'none';
+        } else {
+          let extraHtml = '';
+          subSeriesRef.current.forEach(series => {
+            const point = param.seriesData.get(series) as any;
+            if (point && point.value !== undefined) {
+              const title = series.options().title || 'Value';
+              extraHtml += `<div class="text-gray-500">${title}: <span class="text-gray-900 font-medium">${point.value.toFixed(2)}</span></div>`;
+            }
+          });
+
+          if (extraHtml) {
+            const dateStr = typeof param.time === 'string' ? param.time : new Date((param.time as number) * 1000).toLocaleString();
+            subTooltipRef.current.style.display = 'block';
+            subTooltipRef.current.innerHTML = `
+              <div class="font-semibold mb-1">${dateStr}</div>
+              <div class="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                ${extraHtml}
+              </div>
+            `;
+            
+            // Position tooltip
+            const tooltipWidth = 150;
+            const tooltipHeight = 40 + (subSeriesRef.current.length * 10);
+            const margin = 15;
+            
+            let left = param.point.x + margin;
+            if (left + tooltipWidth > subChartContainerRef.current!.clientWidth) {
+              left = param.point.x - tooltipWidth - margin;
+            }
+            
+            let top = param.point.y + margin;
+            if (top + tooltipHeight > subChartContainerRef.current!.clientHeight) {
+              top = param.point.y - tooltipHeight - margin;
+            }
+            
+            subTooltipRef.current.style.left = left + 'px';
+            subTooltipRef.current.style.top = top + 'px';
+          } else {
+            subTooltipRef.current.style.display = 'none';
+          }
+        }
       }
     });
 
@@ -458,7 +522,13 @@ export default function StockChart({ data, mainIndicator, subIndicators }: Stock
         />
       </div>
       {activeIndicatorsCount > 0 && <div className="w-full h-[1px] bg-gray-200" />}
-      <div ref={subChartContainerRef} className="w-full relative" style={{ height: '0px', display: 'none' }} />
+      <div ref={subChartContainerRef} className="w-full relative" style={{ height: '0px', display: 'none' }}>
+        <div 
+          ref={subTooltipRef} 
+          className="absolute z-50 bg-white border border-gray-200 shadow-lg rounded p-2 pointer-events-none"
+          style={{ display: 'none', width: '150px' }}
+        />
+      </div>
     </div>
   );
 }

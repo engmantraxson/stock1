@@ -198,8 +198,15 @@ export default function Home() {
 
   useEffect(() => {
     const fetchData = async () => {
-      if (timeframe === 'custom' && (!startDate || !endDate)) {
-        return; // Don't fetch until both dates are selected
+      if (timeframe === 'custom') {
+        if (!startDate || !endDate) return; // Don't fetch until both dates are selected
+        const d1 = new Date(startDate);
+        const d2 = new Date(endDate);
+        if (d1 > d2) {
+          setError('Start date must be before end date');
+          setLoading(false);
+          return;
+        }
       }
 
       setLoading(true);
@@ -310,6 +317,7 @@ export default function Home() {
   const handleIntervalChange = (newInterval: string) => {
     setInterval(newInterval);
     // Adjust timeframe if necessary based on Yahoo Finance limits
+    if (timeframe === 'custom') return; // Don't auto-adjust if custom
     if (['1m', '2m', '5m', '15m', '30m'].includes(newInterval)) {
       if (!['1d', '5d', '1mo'].includes(timeframe)) {
         setTimeframe('5d');
@@ -323,6 +331,17 @@ export default function Home() {
 
   const handleTimeframeChange = (newTimeframe: string) => {
     setTimeframe(newTimeframe);
+    if (newTimeframe === 'custom') {
+      if (!startDate) {
+        const d = new Date();
+        d.setMonth(d.getMonth() - 1);
+        setStartDate(d.toISOString().split('T')[0]);
+      }
+      if (!endDate) {
+        setEndDate(new Date().toISOString().split('T')[0]);
+      }
+      return; // Don't auto-adjust interval if custom
+    }
     // Adjust interval if necessary based on Yahoo Finance limits
     if (['2y', '5y', '10y', 'max'].includes(newTimeframe) && ['1m', '2m', '5m', '15m', '30m', '60m', '1h'].includes(interval)) {
       setInterval('1d');
