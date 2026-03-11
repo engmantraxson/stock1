@@ -1,4 +1,25 @@
 import { NextResponse } from 'next/server';
+import YahooFinance from 'yahoo-finance2';
+
+const yahooFinance = new YahooFinance();
+
+function getPeriod1FromRange(range: string): Date {
+  const now = new Date();
+  switch (range) {
+    case '1d': return new Date(now.setDate(now.getDate() - 1));
+    case '5d': return new Date(now.setDate(now.getDate() - 5));
+    case '1mo': return new Date(now.setMonth(now.getMonth() - 1));
+    case '3mo': return new Date(now.setMonth(now.getMonth() - 3));
+    case '6mo': return new Date(now.setMonth(now.getMonth() - 6));
+    case '1y': return new Date(now.setFullYear(now.getFullYear() - 1));
+    case '2y': return new Date(now.setFullYear(now.getFullYear() - 2));
+    case '5y': return new Date(now.setFullYear(now.getFullYear() - 5));
+    case '10y': return new Date(now.setFullYear(now.getFullYear() - 10));
+    case 'ytd': return new Date(now.getFullYear(), 0, 1);
+    case 'max': return new Date('1970-01-01');
+    default: return new Date(now.setFullYear(now.getFullYear() - 1));
+  }
+}
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -9,25 +30,27 @@ export async function GET(request: Request) {
   const period2 = searchParams.get('period2');
 
   try {
-    let url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=${interval}`;
+    const queryOptions: any = {
+      interval: interval as any,
+      return: 'object'
+    };
+
     if (period1 && period2) {
-      url += `&period1=${period1}&period2=${period2}`;
+      queryOptions.period1 = new Date(parseInt(period1) * 1000);
+      queryOptions.period2 = new Date(parseInt(period2) * 1000);
     } else {
-      url += `&range=${range}`;
+      queryOptions.period1 = getPeriod1FromRange(range);
     }
-    const res = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
+    const result = await yahooFinance.chart(symbol, queryOptions);
+    
+    return NextResponse.json({
+      chart: {
+        result: [result]
       }
     });
-    if (!res.ok) {
-      console.error(`Yahoo Finance stock API error: ${res.status} ${res.statusText}`);
-      return NextResponse.json({ error: `Failed to fetch data: ${res.statusText}` });
-    }
-    const data = await res.json();
-    return NextResponse.json(data);
-  } catch (error) {
+  } catch (error: any) {
     console.error(`Stock API error:`, error);
-    return NextResponse.json({ error: 'Failed to fetch data' });
+    return NextResponse.json({ error: error.message || 'Failed to fetch data' });
   }
 }

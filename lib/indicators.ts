@@ -120,6 +120,20 @@ export function computeMACD(data: ChartData[], fastPeriod: number = 12, slowPeri
   })).filter(d => isValid(d.macd) && isValid(d.signal) && isValid(d.histogram));
 }
 
+export function computeMACD_EMA(data: ChartData[], emaPeriod: number, fastPeriod: number = 12, slowPeriod: number = 26, signalPeriod: number = 9) {
+  const values = data.map(d => d.close);
+  const macdResult = ti.MACD.calculate({ values, fastPeriod, slowPeriod, signalPeriod, SimpleMAOscillator: false, SimpleMASignal: false });
+  
+  const macdValues = macdResult.map(r => r.MACD).filter(v => v !== undefined) as number[];
+  const emaResult = ti.EMA.calculate({ period: emaPeriod, values: macdValues });
+  
+  const diff = data.length - emaResult.length;
+  return data.map((d, i) => ({
+    time: d.time,
+    value: i >= diff ? emaResult[i - diff] : null,
+  })).filter(d => isValid(d.value));
+}
+
 export function computeOBV(data: ChartData[]) {
   const close = data.map(d => d.close);
   const volume = data.map(d => d.volume);

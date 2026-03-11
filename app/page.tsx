@@ -1,22 +1,25 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import StockChart from '@/components/StockChart';
+import dynamic from 'next/dynamic';
 import SearchBar from '@/components/SearchBar';
-import { ChartData } from '@/lib/indicators';
+import type { ChartData } from '@/lib/indicators';
 import { format } from 'date-fns';
 import { Activity, TrendingUp, TrendingDown, Clock, BarChart2, Star, Bell, Trash2, Newspaper } from 'lucide-react';
 import Markdown from 'react-markdown';
 import { GoogleGenAI } from "@google/genai";
+
+const StockChart = dynamic(() => import('@/components/StockChart'), { ssr: false });
 
 export default function Home() {
   const [data, setData] = useState<ChartData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [mainIndicator, setMainIndicator] = useState('MA');
-  const [selectedSubIndicators, setSelectedSubIndicators] = useState<string[]>(['VOL', 'NONE', 'NONE', 'NONE', 'NONE', 'NONE', 'NONE', 'NONE', 'NONE', 'NONE']);
+  const [selectedSubIndicators, setSelectedSubIndicators] = useState<string[]>(['VOL', 'MACD', 'NONE', 'NONE', 'NONE', 'NONE', 'NONE', 'NONE', 'NONE', 'NONE']);
   const [timeframe, setTimeframe] = useState('1y');
   const [interval, setInterval] = useState('1d');
+  const [chartType, setChartType] = useState<'candlestick' | 'line'>('candlestick');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   
@@ -37,6 +40,13 @@ export default function Home() {
 
   const [triggeredAlerts, setTriggeredAlerts] = useState<any[]>([]);
   const [showGlobalAlerts, setShowGlobalAlerts] = useState(false);
+
+  const [macdColors, setMacdColors] = useState({
+    macdLine: '#2962FF',
+    signalLine: '#FF6D00',
+    histPositive: '#26a69a',
+    histNegative: '#ef5350'
+  });
 
   // Load favorites and alerts on mount
   useEffect(() => {
@@ -197,6 +207,66 @@ export default function Home() {
   }, [alerts]);
 
   useEffect(() => {
+    const fetchQuote = async () => {
+      if (!symbol) return;
+      try {
+        const res = await fetch(`/api/quote?symbols=${encodeURIComponent(symbol)}`);
+        if (!res.ok) return;
+        
+        const contentType = res.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          console.error('Received non-JSON response from quote API');
+          return;
+        }
+        
+        const json = await res.json();
+        const result = json.quoteResponse?.result?.[0];
+        if (result) {
+          setQuote({
+            price: result.regularMarketPrice,
+            change: result.regularMarketChange,
+            changePercent: result.regularMarketChangePercent,
+            open: result.regularMarketOpen,
+            high: result.regularMarketDayHigh,
+            low: result.regularMarketDayLow,
+            volume: result.regularMarketVolume,
+          });
+          
+          setData(prevData => {
+            if (prevData.length === 0) return prevData;
+            const newData = [...prevData];
+            const last = { ...newData[newData.length - 1] };
+            
+            last.close = result.regularMarketPrice;
+            
+            // Only update high/low/volume if interval is 1d or larger
+            if (['1d', '5d', '1wk', '1mo', '3mo'].includes(interval)) {
+              if (result.regularMarketDayHigh > last.high) last.high = result.regularMarketDayHigh;
+              if (result.regularMarketDayLow < last.low) last.low = result.regularMarketDayLow;
+              last.volume = result.regularMarketVolume || last.volume;
+            } else {
+              if (result.regularMarketPrice > last.high) last.high = result.regularMarketPrice;
+              if (result.regularMarketPrice < last.low) last.low = result.regularMarketPrice;
+            }
+            
+            newData[newData.length - 1] = last;
+            return newData;
+          });
+        }
+      } catch (err) {
+        console.error("Failed to fetch real-time quote:", err);
+      }
+    };
+
+    // Fetch immediately
+    fetchQuote();
+    
+    // Poll every 2 seconds
+    const intervalId = window.setInterval(fetchQuote, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [symbol, interval]);
+
+  useEffect(() => {
     const fetchData = async () => {
       if (timeframe === 'custom') {
         if (!startDate || !endDate) return; // Don't fetch until both dates are selected
@@ -287,23 +357,6 @@ export default function Home() {
         const uniqueData = Array.from(uniqueDataMap.values());
         
         setData(uniqueData);
-
-        if (uniqueData.length > 0) {
-          const last = uniqueData[uniqueData.length - 1];
-          const prev = uniqueData[uniqueData.length - 2] || last;
-          const change = last.close - prev.close;
-          const changePercent = (change / prev.close) * 100;
-          
-          setQuote({
-            price: last.close,
-            change,
-            changePercent,
-            open: last.open,
-            high: last.high,
-            low: last.low,
-            volume: last.volume,
-          });
-        }
       } catch (err: any) {
         setError(err.message);
       } finally {
@@ -372,22 +425,22 @@ export default function Home() {
   ];
 
   const mainIndicators = ['MA', 'EMA', 'WMA', 'BOLL', 'VWAP', 'SAR', 'SUPER', 'NONE'];
-  const subIndicators = ['VOL', 'MACD', 'RSI', 'KDJ', 'OBV', 'CCI', 'StochRSI', 'WR', 'DMI', 'MTM', 'EMV', 'MFI', 'TRIX', 'AVL', 'NONE'];
+  const subIndicators = ['VOL', 'MACD', 'MACD_HIST', 'MACD_EMA9', 'MACD_EMA26', 'RSI', 'KDJ', 'OBV', 'CCI', 'StochRSI', 'WR', 'DMI', 'MTM', 'EMV', 'MFI', 'TRIX', 'AVL', 'SAR', 'NONE'];
 
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900 font-sans">
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between sticky top-0 z-10">
+      <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
         <div className="flex items-center gap-4">
-          <div className="w-10 h-10 bg-blue-600 text-white rounded-lg flex items-center justify-center font-bold text-xl">
+          <div className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center font-bold text-xl shadow-sm">
             {stockName ? stockName.charAt(0).toUpperCase() : symbol.charAt(0).toUpperCase()}
           </div>
           <div>
-            <h1 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-              {stockName} <span className="text-sm font-normal text-gray-500 bg-gray-100 px-2 py-0.5 rounded">{symbol}</span>
+            <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+              {stockName} <span className="text-sm font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">{symbol}</span>
               <button 
                 onClick={toggleFavorite}
-                className={`ml-1 p-1 rounded-full hover:bg-gray-100 transition-colors ${isFavorite ? 'text-yellow-400' : 'text-gray-300'}`}
+                className={`ml-1 p-1.5 rounded-full hover:bg-slate-100 transition-colors ${isFavorite ? 'text-amber-400' : 'text-slate-300'}`}
                 title={isFavorite ? "Remove from favorites" : "Add to favorites"}
               >
                 <Star className="w-5 h-5" fill={isFavorite ? "currentColor" : "none"} />
@@ -396,18 +449,18 @@ export default function Home() {
             <div className="flex items-center gap-3 text-sm mt-1">
               {quote ? (
                 <>
-                  <span className={`text-2xl font-bold ${quote.change >= 0 ? 'text-red-600' : 'text-green-600'}`}>
+                  <span className={`text-2xl font-bold font-mono tracking-tight ${quote.change >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                     {quote.price.toFixed(2)}
                   </span>
-                  <span className={`font-medium ${quote.change >= 0 ? 'text-red-600' : 'text-green-600'}`}>
+                  <span className={`font-medium font-mono ${quote.change >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                     {quote.change > 0 ? '+' : ''}{quote.change.toFixed(2)}
                   </span>
-                  <span className={`font-medium ${quote.change >= 0 ? 'text-red-600' : 'text-green-600'}`}>
+                  <span className={`font-medium font-mono ${quote.change >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
                     {quote.change > 0 ? '+' : ''}{quote.changePercent.toFixed(2)}%
                   </span>
                 </>
               ) : (
-                <span className="text-gray-400">Loading quote...</span>
+                <span className="text-slate-400">Loading quote...</span>
               )}
             </div>
           </div>
@@ -418,39 +471,39 @@ export default function Home() {
             setStockName(name);
           }} />
         </div>
-        <div className="flex items-center gap-4 text-sm text-gray-500">
+        <div className="flex items-center gap-4 text-sm text-slate-500">
           <div className="relative">
             <button 
               onClick={() => setShowGlobalAlerts(!showGlobalAlerts)}
-              className="relative p-2 hover:bg-gray-100 rounded-full transition-colors"
+              className="relative p-2 hover:bg-slate-100 rounded-full transition-colors"
             >
               <Bell className="w-5 h-5" />
               {triggeredAlerts.length > 0 && (
-                <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white animate-pulse"></span>
+                <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-rose-500 rounded-full border-2 border-white animate-pulse"></span>
               )}
             </button>
             
             {showGlobalAlerts && (
-              <div className="absolute right-0 mt-2 w-72 bg-white rounded-lg shadow-lg border border-gray-200 z-50 overflow-hidden">
-                <div className="p-3 border-b border-gray-100 bg-gray-50 font-semibold text-gray-700 flex justify-between items-center">
+              <div className="absolute right-0 mt-2 w-72 bg-white rounded-xl shadow-lg border border-slate-200 z-50 overflow-hidden">
+                <div className="p-3 border-b border-slate-100 bg-slate-50 font-semibold text-slate-700 flex justify-between items-center">
                   <span>Triggered Alerts</span>
-                  <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full">{triggeredAlerts.length} active</span>
+                  <span className="text-xs bg-rose-100 text-rose-600 px-2 py-0.5 rounded-full">{triggeredAlerts.length} active</span>
                 </div>
                 <div className="max-h-64 overflow-y-auto">
                   {triggeredAlerts.length > 0 ? (
-                    <ul className="divide-y divide-gray-100">
+                    <ul className="divide-y divide-slate-100">
                       {triggeredAlerts.map(alert => (
-                        <li key={alert.id} className="p-3 hover:bg-gray-50 transition-colors cursor-pointer" onClick={() => {
+                        <li key={alert.id} className="p-3 hover:bg-slate-50 transition-colors cursor-pointer" onClick={() => {
                           setSymbol(alert.symbol);
                           setShowGlobalAlerts(false);
                         }}>
                           <div className="flex justify-between items-center mb-1">
-                            <span className="font-bold text-gray-900">{alert.symbol}</span>
-                            <span className="text-xs text-gray-500">{alert.type === 'above' ? 'Target ≥' : 'Target ≤'} {alert.price.toFixed(2)}</span>
+                            <span className="font-bold text-slate-900">{alert.symbol}</span>
+                            <span className="text-xs text-slate-500">{alert.type === 'above' ? 'Target ≥' : 'Target ≤'} {alert.price.toFixed(2)}</span>
                           </div>
                           <div className="flex justify-between items-center text-sm">
-                            <span className="text-gray-600">Current Price:</span>
-                            <span className={`font-semibold ${alert.type === 'above' ? 'text-green-600' : 'text-red-600'}`}>
+                            <span className="text-slate-600">Current Price:</span>
+                            <span className={`font-semibold font-mono ${alert.type === 'above' ? 'text-emerald-600' : 'text-rose-600'}`}>
                               {alert.currentPrice?.toFixed(2)}
                             </span>
                           </div>
@@ -458,7 +511,7 @@ export default function Home() {
                       ))}
                     </ul>
                   ) : (
-                    <div className="p-4 text-center text-gray-500 text-sm">
+                    <div className="p-4 text-center text-slate-500 text-sm">
                       No alerts currently triggered.
                     </div>
                   )}
@@ -466,15 +519,15 @@ export default function Home() {
               </div>
             )}
           </div>
-          <div className="flex items-center gap-1 hidden sm:flex">
-            <Clock className="w-4 h-4" />
-            <span>Market Closed</span>
+          <div className="flex items-center gap-1.5 hidden sm:flex bg-slate-100 px-3 py-1.5 rounded-full">
+            <Clock className="w-4 h-4 text-slate-400" />
+            <span className="font-medium">Market Closed</span>
           </div>
         </div>
       </header>
 
       {/* Mobile Search Bar */}
-      <div className="md:hidden bg-white border-b border-gray-200 px-6 py-3">
+      <div className="md:hidden bg-white border-b border-slate-200 px-6 py-3">
         <SearchBar onSelect={(sym, name) => {
           setSymbol(sym);
           setStockName(name);
@@ -485,27 +538,44 @@ export default function Home() {
         {/* Left Column: Chart */}
         <div className="lg:col-span-3 space-y-4">
           {/* Toolbars */}
-          <div className="bg-white p-2 rounded-lg border border-gray-200 flex flex-wrap items-center gap-4 shadow-sm">
-            <div className="flex items-center gap-1 flex-wrap bg-gray-100 p-1 rounded-md">
+          <div className="bg-white p-2 rounded-xl border border-slate-200 flex flex-wrap items-center gap-4 shadow-sm">
+            <div className="flex items-center gap-1 flex-wrap bg-slate-100 p-1 rounded-lg">
+              <button
+                onClick={() => setChartType('candlestick')}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${chartType === 'candlestick' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:bg-slate-200'}`}
+              >
+                K-Line
+              </button>
+              <button
+                onClick={() => setChartType('line')}
+                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${chartType === 'line' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:bg-slate-200'}`}
+              >
+                Line
+              </button>
+            </div>
+
+            <div className="hidden sm:block h-6 w-px bg-slate-200 mx-2"></div>
+
+            <div className="flex items-center gap-1 flex-wrap bg-slate-100 p-1 rounded-lg">
               {intervals.map(int => (
                 <button
                   key={int.value}
                   onClick={() => handleIntervalChange(int.value)}
-                  className={`px-3 py-1 text-xs font-medium rounded ${interval === int.value ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:bg-gray-200'}`}
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${interval === int.value ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:bg-slate-200'}`}
                 >
                   {int.label}
                 </button>
               ))}
             </div>
 
-            <div className="hidden sm:block h-6 w-px bg-gray-300 mx-2"></div>
+            <div className="hidden sm:block h-6 w-px bg-slate-200 mx-2"></div>
 
-            <div className="flex items-center gap-1 flex-wrap bg-gray-100 p-1 rounded-md">
+            <div className="flex items-center gap-1 flex-wrap bg-slate-100 p-1 rounded-lg">
               {timeframes.map(tf => (
                 <button
                   key={tf.value}
                   onClick={() => handleTimeframeChange(tf.value)}
-                  className={`px-3 py-1 text-xs font-medium rounded ${timeframe === tf.value ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:bg-gray-200'}`}
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${timeframe === tf.value ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:bg-slate-200'}`}
                 >
                   {tf.label}
                 </button>
@@ -518,28 +588,28 @@ export default function Home() {
                   type="date" 
                   value={startDate} 
                   onChange={(e) => setStartDate(e.target.value)}
-                  className="text-xs border border-gray-300 rounded px-2 py-1 bg-white"
+                  className="text-xs border border-slate-300 rounded-md px-2 py-1 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
                 />
-                <span className="text-xs text-gray-500">to</span>
+                <span className="text-xs text-slate-500 font-medium">to</span>
                 <input 
                   type="date" 
                   value={endDate} 
                   onChange={(e) => setEndDate(e.target.value)}
-                  className="text-xs border border-gray-300 rounded px-2 py-1 bg-white"
+                  className="text-xs border border-slate-300 rounded-md px-2 py-1 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
                 />
               </div>
             )}
             
-            <div className="hidden sm:block h-6 w-px bg-gray-300 mx-2"></div>
+            <div className="hidden sm:block h-6 w-px bg-slate-200 mx-2"></div>
             
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Main</span>
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Main</span>
               <div className="flex gap-1 flex-wrap">
                 {mainIndicators.map(ind => (
                   <button
                     key={ind}
                     onClick={() => setMainIndicator(ind)}
-                    className={`px-2 py-1 text-xs font-medium rounded border ${mainIndicator === ind ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                    className={`px-2 py-1 text-xs font-medium rounded-md border transition-colors ${mainIndicator === ind ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'}`}
                   >
                     {ind}
                   </button>
@@ -549,29 +619,42 @@ export default function Home() {
           </div>
 
           {/* Chart Area */}
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 min-h-[450px] flex flex-col relative">
+          <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 min-h-[450px] flex flex-col relative">
             {loading && (
-              <div className="absolute inset-0 z-10 bg-white/80 flex items-center justify-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+              <div className="absolute inset-0 z-10 bg-white/80 flex items-center justify-center rounded-xl">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
               </div>
             )}
             {error && (
-              <div className="absolute inset-0 z-10 bg-white flex items-center justify-center text-red-500">
+              <div className="absolute inset-0 z-10 bg-white flex items-center justify-center text-rose-500 rounded-xl">
                 {error}
               </div>
             )}
             {!loading && !error && data.length > 0 && (
-              <StockChart data={data} mainIndicator={mainIndicator} subIndicators={selectedSubIndicators} />
+              <StockChart data={data} mainIndicator={mainIndicator} subIndicators={selectedSubIndicators} macdColors={macdColors} chartType={chartType} />
             )}
           </div>
 
           {/* Sub Indicators Toolbar */}
-          <div className="bg-white p-4 rounded-lg border border-gray-200 flex flex-col gap-3 shadow-sm">
-            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Sub Indicators</span>
+          <div className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col gap-3 shadow-sm">
+            <div className="flex justify-between items-center">
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Sub Indicators</span>
+              {(selectedSubIndicators.includes('MACD') || selectedSubIndicators.includes('MACD_HIST')) && (
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">MACD Colors</span>
+                  <div className="flex items-center gap-2">
+                    <label className="text-[10px] text-slate-500 flex items-center gap-1">Line <input type="color" value={macdColors.macdLine} onChange={e => setMacdColors({...macdColors, macdLine: e.target.value})} className="w-4 h-4 p-0 border-0" /></label>
+                    <label className="text-[10px] text-slate-500 flex items-center gap-1">Signal <input type="color" value={macdColors.signalLine} onChange={e => setMacdColors({...macdColors, signalLine: e.target.value})} className="w-4 h-4 p-0 border-0" /></label>
+                    <label className="text-[10px] text-slate-500 flex items-center gap-1">Hist+ <input type="color" value={macdColors.histPositive} onChange={e => setMacdColors({...macdColors, histPositive: e.target.value})} className="w-4 h-4 p-0 border-0" /></label>
+                    <label className="text-[10px] text-slate-500 flex items-center gap-1">Hist- <input type="color" value={macdColors.histNegative} onChange={e => setMacdColors({...macdColors, histNegative: e.target.value})} className="w-4 h-4 p-0 border-0" /></label>
+                  </div>
+                </div>
+              )}
+            </div>
             <div className="grid grid-cols-2 sm:grid-cols-5 lg:grid-cols-10 gap-2">
               {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((index) => (
                 <div key={index} className="flex flex-col gap-1">
-                  <label className="text-[10px] text-gray-400 uppercase font-medium">Slot {index + 1}</label>
+                  <label className="text-[10px] text-slate-400 uppercase font-medium">Slot {index + 1}</label>
                   <select
                     value={selectedSubIndicators[index]}
                     onChange={(e) => {
@@ -579,7 +662,7 @@ export default function Home() {
                       newIndicators[index] = e.target.value;
                       setSelectedSubIndicators(newIndicators);
                     }}
-                    className="text-xs border border-gray-300 rounded px-2 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                    className="text-xs border border-slate-300 rounded-md px-2 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
                   >
                     {subIndicators.map(ind => (
                       <option key={ind} value={ind}>{ind}</option>
@@ -594,15 +677,15 @@ export default function Home() {
         {/* Right Column: Details */}
         <div className="space-y-6">
           {/* Favorites List */}
-          <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-5">
-            <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <Star className="w-4 h-4 text-yellow-400" fill="currentColor" />
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h3 className="text-sm font-bold text-slate-900 mb-4 flex items-center gap-2">
+              <Star className="w-4 h-4 text-amber-400" fill="currentColor" />
               Favorites
             </h3>
             {favorites.length > 0 ? (
               <ul className="space-y-2 max-h-60 overflow-y-auto pr-1">
                 {favorites.map((fav) => (
-                  <li key={fav.symbol} className={`flex items-center justify-between p-1 rounded-md transition-colors group ${symbol === fav.symbol ? 'bg-blue-50 border border-blue-100' : 'hover:bg-gray-50 border border-transparent'}`}>
+                  <li key={fav.symbol} className={`flex items-center justify-between p-1.5 rounded-lg transition-colors group ${symbol === fav.symbol ? 'bg-indigo-50 border border-indigo-100' : 'hover:bg-slate-50 border border-transparent'}`}>
                     <button
                       onClick={() => {
                         setSymbol(fav.symbol);
@@ -610,15 +693,15 @@ export default function Home() {
                       }}
                       className="flex-1 text-left flex flex-col truncate pr-2 p-1"
                     >
-                      <span className={`text-sm font-medium truncate ${symbol === fav.symbol ? 'text-blue-700' : 'text-gray-900'}`}>{fav.symbol}</span>
-                      <span className="text-xs text-gray-500 truncate">{fav.name}</span>
+                      <span className={`text-sm font-semibold truncate ${symbol === fav.symbol ? 'text-indigo-700' : 'text-slate-900'}`}>{fav.symbol}</span>
+                      <span className="text-xs text-slate-500 truncate">{fav.name}</span>
                     </button>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         setFavorites(prev => prev.filter(f => f.symbol !== fav.symbol));
                       }}
-                      className="text-gray-400 hover:text-red-500 transition-colors p-2 opacity-0 group-hover:opacity-100 focus:opacity-100"
+                      className="text-slate-400 hover:text-rose-500 transition-colors p-2 opacity-0 group-hover:opacity-100 focus:opacity-100"
                       title="Remove from favorites"
                     >
                       <Trash2 className="w-4 h-4" />
@@ -627,67 +710,67 @@ export default function Home() {
                 ))}
               </ul>
             ) : (
-              <p className="text-sm text-gray-500 italic">No favorites added yet.</p>
+              <p className="text-sm text-slate-500 italic">No favorites added yet.</p>
             )}
           </div>
 
-          <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-5">
-            <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <BarChart2 className="w-4 h-4 text-blue-600" />
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h3 className="text-sm font-bold text-slate-900 mb-4 flex items-center gap-2">
+              <BarChart2 className="w-4 h-4 text-indigo-600" />
               Quote Details
             </h3>
             {quote ? (
               <div className="grid grid-cols-2 gap-y-4 gap-x-6 text-sm">
                 <div>
-                  <div className="text-gray-500 mb-1">Open</div>
-                  <div className={`font-medium ${quote.open > quote.price ? 'text-green-600' : 'text-red-600'}`}>
+                  <div className="text-slate-500 mb-1 text-xs uppercase tracking-wider font-semibold">Open</div>
+                  <div className={`font-mono font-medium ${quote.price >= quote.open ? 'text-emerald-600' : 'text-rose-600'}`}>
                     {quote.open.toFixed(2)}
                   </div>
                 </div>
                 <div>
-                  <div className="text-gray-500 mb-1">Prev Close</div>
-                  <div className="font-medium text-gray-900">
+                  <div className="text-slate-500 mb-1 text-xs uppercase tracking-wider font-semibold">Prev Close</div>
+                  <div className="font-mono font-medium text-slate-900">
                     {(quote.price - quote.change).toFixed(2)}
                   </div>
                 </div>
                 <div>
-                  <div className="text-gray-500 mb-1">High</div>
-                  <div className="font-medium text-red-600">
+                  <div className="text-slate-500 mb-1 text-xs uppercase tracking-wider font-semibold">High</div>
+                  <div className="font-mono font-medium text-emerald-600">
                     {quote.high.toFixed(2)}
                   </div>
                 </div>
                 <div>
-                  <div className="text-gray-500 mb-1">Low</div>
-                  <div className="font-medium text-green-600">
+                  <div className="text-slate-500 mb-1 text-xs uppercase tracking-wider font-semibold">Low</div>
+                  <div className="font-mono font-medium text-rose-600">
                     {quote.low.toFixed(2)}
                   </div>
                 </div>
                 <div className="col-span-2">
-                  <div className="text-gray-500 mb-1">Volume</div>
-                  <div className="font-medium text-gray-900">
+                  <div className="text-slate-500 mb-1 text-xs uppercase tracking-wider font-semibold">Volume</div>
+                  <div className="font-mono font-medium text-slate-900">
                     {(quote.volume / 100000000).toFixed(2)} B
                   </div>
                 </div>
               </div>
             ) : (
-              <div className="text-gray-400 text-sm">Loading...</div>
+              <div className="text-slate-400 text-sm">Loading...</div>
             )}
           </div>
 
-          <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-5">
-            <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <Activity className="w-4 h-4 text-blue-600" />
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h3 className="text-sm font-bold text-slate-900 mb-4 flex items-center gap-2">
+              <Activity className="w-4 h-4 text-indigo-600" />
               About {symbol}
             </h3>
-            <p className="text-sm text-gray-600 leading-relaxed">
+            <p className="text-sm text-slate-600 leading-relaxed">
               {stockName} ({symbol}) is currently being viewed. Additional company information would be displayed here.
             </p>
           </div>
 
           {/* Price Alerts */}
-          <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-5">
-            <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <Bell className="w-4 h-4 text-blue-600" />
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h3 className="text-sm font-bold text-slate-900 mb-4 flex items-center gap-2">
+              <Bell className="w-4 h-4 text-indigo-600" />
               Price Alerts
             </h3>
             
@@ -696,7 +779,7 @@ export default function Home() {
                 <select
                   value={newAlertType}
                   onChange={(e) => setNewAlertType(e.target.value as 'above' | 'below')}
-                  className="text-sm border border-gray-300 rounded-md px-2 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                  className="text-sm border border-slate-300 rounded-md px-2 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500"
                 >
                   <option value="above">Above</option>
                   <option value="below">Below</option>
@@ -706,14 +789,14 @@ export default function Home() {
                   placeholder="Price"
                   value={newAlertPrice}
                   onChange={(e) => setNewAlertPrice(e.target.value)}
-                  className="flex-1 text-sm border border-gray-300 rounded-md px-3 py-1.5 bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                  className="flex-1 text-sm border border-slate-300 rounded-md px-3 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 font-mono"
                   step="0.01"
                 />
               </div>
               <button
                 onClick={handleAddAlert}
                 disabled={!newAlertPrice || isNaN(parseFloat(newAlertPrice))}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium py-2 px-4 rounded-md transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
+                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium py-2 px-4 rounded-md transition-colors disabled:bg-indigo-300 disabled:cursor-not-allowed"
               >
                 Add Alert
               </button>
@@ -728,16 +811,16 @@ export default function Home() {
                   );
                   
                   return (
-                    <li key={alert.id} className={`flex items-center justify-between p-2 rounded-md border ${isTriggered ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'}`}>
-                      <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${isTriggered ? 'bg-red-500 animate-pulse' : 'bg-gray-400'}`}></div>
-                        <span className="text-sm text-gray-700">
-                          {alert.type === 'above' ? '≥' : '≤'} <span className="font-semibold">{alert.price.toFixed(2)}</span>
+                    <li key={alert.id} className={`flex items-center justify-between p-2.5 rounded-lg border ${isTriggered ? 'bg-rose-50 border-rose-200' : 'bg-slate-50 border-slate-200'}`}>
+                      <div className="flex items-center gap-2.5">
+                        <div className={`w-2 h-2 rounded-full ${isTriggered ? 'bg-rose-500 animate-pulse' : 'bg-slate-400'}`}></div>
+                        <span className="text-sm text-slate-700">
+                          {alert.type === 'above' ? '≥' : '≤'} <span className="font-semibold font-mono">{alert.price.toFixed(2)}</span>
                         </span>
                       </div>
                       <button
                         onClick={() => removeAlert(alert.id)}
-                        className="text-gray-400 hover:text-red-500 transition-colors p-1"
+                        className="text-slate-400 hover:text-rose-500 transition-colors p-1.5 rounded-md hover:bg-slate-100"
                         title="Remove alert"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -747,34 +830,35 @@ export default function Home() {
                 })}
               </ul>
             ) : (
-              <p className="text-sm text-gray-500 italic text-center py-2">No alerts set for {symbol}</p>
+              <p className="text-sm text-slate-500 italic text-center py-2">No alerts set for {symbol}</p>
             )}
           </div>
 
           {/* News Feed */}
-          <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-5">
-            <h3 className="text-sm font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <Newspaper className="w-4 h-4 text-blue-600" />
+          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-5">
+            <h3 className="text-sm font-bold text-slate-900 mb-4 flex items-center gap-2">
+              <Newspaper className="w-4 h-4 text-indigo-600" />
               Latest News
             </h3>
             
             {newsLoading ? (
-              <div className="flex justify-center py-4">
-                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+              <div className="flex justify-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
               </div>
             ) : newsText ? (
-              <div className="prose prose-sm max-w-none prose-a:text-blue-600 hover:prose-a:text-blue-800">
+              <div className="prose prose-sm max-w-none prose-a:text-indigo-600 hover:prose-a:text-indigo-800 prose-headings:text-slate-900 prose-p:text-slate-600">
                 <Markdown>{newsText}</Markdown>
                 {newsChunks && newsChunks.length > 0 && (
-                  <div className="mt-4 pt-4 border-t border-gray-100">
-                    <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Sources</h4>
-                    <ul className="space-y-1">
+                  <div className="mt-6 pt-4 border-t border-slate-100">
+                    <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Sources</h4>
+                    <ul className="space-y-2">
                       {newsChunks.map((chunk: any, i: number) => {
                         if (chunk.web?.uri) {
                           return (
                             <li key={i} className="text-xs truncate">
-                              <a href={chunk.web.uri} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">
-                                {chunk.web.title || chunk.web.uri}
+                              <a href={chunk.web.uri} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-indigo-300 flex-shrink-0"></span>
+                                <span className="truncate">{chunk.web.title || chunk.web.uri}</span>
                               </a>
                             </li>
                           );
@@ -786,7 +870,7 @@ export default function Home() {
                 )}
               </div>
             ) : (
-              <p className="text-sm text-gray-500 italic text-center py-2">No news available for {symbol}</p>
+              <p className="text-sm text-slate-500 italic text-center py-4">No news available for {symbol}</p>
             )}
           </div>
         </div>
